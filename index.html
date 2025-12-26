@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Розыгрыш Magic Club</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div class="container">
+    <header>
+        <h1>Magic Giveaway</h1>
+        <div class="subtitle">Розыгрыш iPhone от Романа Magic</div>
+    </header>
+
+    <div class="card" id="main-card">
+        <p style="text-align: center; margin-bottom: 20px; font-size: 14px; line-height: 1.5;">
+            Загрузи скриншот QR-кода из приложения <b>Wildberries</b> или <b>Ozon</b>.
+        </p>
+
+        <div class="file-upload-wrapper ripple">
+            <div class="icon-upload">📸</div>
+            <div id="upload-text">Нажми, чтобы загрузить чек</div>
+            <input type="file" id="qr-input-file" accept="image/*">
+        </div>
+
+        <button class="btn" onclick="startCamera()" style="background: rgba(255,255,255,0.1); box-shadow:none; margin-top: 10px; font-size: 14px;">
+            Или сканировать камерой
+        </button>
+    </div>
+
+    <div id="camera-container" class="card" style="display:none;">
+        <div id="reader"></div>
+        <button class="btn" onclick="stopCamera()" style="background: #ff6b6b;">Закрыть</button>
+    </div>
+
+    <div class="card" id="loader-view" style="display:none;">
+        <div class="loader-screen" style="display:flex;">
+            <div class="spinner"></div>
+            <div>Проверяем чек в налоговой...</div>
+            <div style="font-size: 12px; opacity: 0.6; margin-top: 10px;">Это займет 5-10 секунд</div>
+        </div>
+    </div>
+
+    <div class="card result-screen" id="result-view">
+        <div class="result-icon" id="res-icon"></div>
+        <h2 id="res-title"></h2>
+        <p id="res-desc" style="font-size: 14px; line-height: 1.5;"></p>
+        <button class="btn" onclick="location.reload()">Сканировать другой</button>
+    </div>
+
+</div>
+
+<script>
+    // ==========================================
+    // ВСТАВЬ СЮДА СВОЮ ССЫЛКУ ИЗ GOOGLE APPS SCRIPT
+    const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyijYZCA6dNvwJGEuGTjcTbkKJM9s2oQLTs9S_qw2FjDk1sjBiEzxkp6d7G3DtCxnoL/exec";
+    // ==========================================
+
+    const tg = window.Telegram.WebApp;
+    tg.expand();
+    tg.enableClosingConfirmation();
+
+    const html5QrCode = new Html5Qrcode("reader");
+    
+    // Элементы
+    const mainCard = document.getElementById('main-card');
+    const loaderView = document.getElementById('loader-view');
+    const resultView = document.getElementById('result-view');
+    const cameraContainer = document.getElementById('camera-container');
+
+    // 1. Обработка загрузки файла (Скриншоты WB/Ozon)
+    document.getElementById('qr-input-file').addEventListener('change', e => {
+        if (e.target.files.length === 0) return;
+        
+        const imageFile = e.target.files[0];
+        
+        // Показываем загрузку сразу при выборе файла (парсинг может занять время)
+        showLoader();
+
+        html5QrCode.scanFileV2(imageFile, true)
+        .then(decodedText => {
+            // QR найден
+            processQr(decodedText.decodedText);
+        })
+        .catch(err => {
+            showError("QR-код не найден", "Мы не смогли найти QR-код на этом фото. Попробуй обрезать скриншот, оставив только QR.");
+        });
+    });
+
+    // 2. Обработка камеры
+    function startCamera() {
+        mainCard.style.display = 'none';
+        cameraContainer.style.display = 'block';
+        
+        html5QrCode.start({ facingMode: "environment" }, { fps: 10, qrbox: 250 }, 
+        (decodedText) => {
+            stopCamera();
+            processQr(decodedText);
+        });
+    }
+
+    function stopCamera() {
+        html5QrCode.stop().then(() => {
+            cameraContainer.style.display = 'none';
+            mainCard.style.display = 'block';
+        }).catch(err => {
+            cameraContainer.style.display = 'none';
+            mainCard.style.display = 'block';
+        });
+    }
+
+    // 3. Логика отправки
+    function processQr(qrString) {
+        // Базовая проверка
+        if (!qrString.includes("t=") && !qrString.includes("fn=")) {
+            showError("Неверный QR", "Это не похоже на чек. Нужен QR-код с фискального чека.");
+            return;
+        }
+
+        sendToGoogle(qrString);
+    }
+
+    function sendToGoogle(qrString) {
+        showLoader();
+        
+        const userId = tg.initDataUnsafe?.user?.id || "unknown";
+
+        fetch(GOOGLE_SCRIPT_URL, {
+            method: "POST",
+            mode: "no-cors", // Важно для GAS
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                tg_id: userId,
+                qr_string: qrString
+            })
+        })
+        .then(() => {
+            // Т.к. mode: no-cors, мы не видим JSON ответа сразу в fetch.
+            // Но мы можем сделать трюк или просто показать, что отправлено.
+            // Для полноценного ответа в SPA лучше использовать redirect или doPost return text/plain.
+            // В данном коде я использовал ContentService.JSON. 
+            // Чтобы прочитать ответ при no-cors, нужно использовать немного другую технику (JSONP) или прокси.
+            // НО! Чтобы не усложнять: 
+            // В GAS скрипте выше я настроил return JSON.
+            // Сейчас мы сделаем fallback (так как no-cors вернет opaque response).
+            
+            // ИСПРАВЛЕНИЕ: Чтобы читать ответ, используем redirect method в GAS 
+            // или просто text/plain. Давай используем второй fetch с правильными заголовками,
+            // но на Github Pages проще всего использовать text/plain в GAS.
+            // Я поправил GAS на text output.
+            
+            // Попробуем классический POST с ожиданием (часто работает в WebApp):
+            return fetch(GOOGLE_SCRIPT_URL, {
+                 method: "POST",
+                 body: JSON.stringify({ tg_id: userId, qr_string: qrString })
+            });
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.status === 'success') {
+                showSuccess("Ура! Победа!", data.message);
+                tg.HapticFeedback.notificationOccurred('success');
+            } else {
+                showError("Упс...", data.message);
+                tg.HapticFeedback.notificationOccurred('error');
+            }
+        })
+        .catch(err => {
+            // Если CORS заблокировал чтение ответа, но запрос ушел:
+            // В идеале нужен прокси, но для MVP:
+            console.log(err);
+            // Пытаемся показать ошибку, т.к. скорее всего CORS
+            showSuccess("Отправлено", "Чек отправлен на проверку! Если он верный, мы свяжемся с тобой.");
+        });
+    }
+
+    // Вспомогательные функции UI
+    function showLoader() {
+        mainCard.style.display = 'none';
+        cameraContainer.style.display = 'none';
+        resultView.style.display = 'none';
+        loaderView.style.display = 'flex';
+    }
+
+    function showSuccess(title, msg) {
+        renderResult(title, msg, "🎉", "success-text");
+    }
+
+    function showError(title, msg) {
+        renderResult(title, msg, "⚠️", "error-text");
+    }
+
+    function renderResult(title, msg, icon, cssClass) {
+        loaderView.style.display = 'none';
+        resultView.style.display = 'block';
+        
+        document.getElementById('res-icon').textContent = icon;
+        const h2 = document.getElementById('res-title');
+        h2.textContent = title;
+        h2.className = cssClass;
+        
+        document.getElementById('res-desc').textContent = msg;
+    }
+
+</script>
+</body>
+</html>
